@@ -18,14 +18,13 @@ class GaussianFourierFeatureTransform(torch.nn.Module):
         super().__init__()
 
         if learnable:
-            self._B = nn.Parameter(torch.randn(
-                (num_input_channels, mapping_size)) * scale)
+            self._B = nn.Parameter(torch.randn((num_input_channels, mapping_size)) * scale)
         else:
             self._B = torch.randn((num_input_channels, mapping_size)) * scale
 
     def forward(self, x):
         x = x.squeeze(0)
-        assert x.dim() == 2, 'Expected 2D input (got {}D input)'.format(x.dim())
+        assert x.dim() == 2, "Expected 2D input (got {}D input)".format(x.dim())
         x = x @ self._B.to(x.device)
         return torch.sin(x)
 
@@ -41,22 +40,19 @@ class Nerf_positional_embedding(torch.nn.Module):
         self.log_sampling = log_sampling
         self.include_input = True
         self.periodic_fns = [torch.sin, torch.cos]
-        self.max_freq_log2 = multires-1
+        self.max_freq_log2 = multires - 1
         self.num_freqs = multires
         self.max_freq = self.max_freq_log2
         self.N_freqs = self.num_freqs
 
     def forward(self, x):
         x = x.squeeze(0)
-        assert x.dim() == 2, 'Expected 2D input (got {}D input)'.format(
-            x.dim())
+        assert x.dim() == 2, "Expected 2D input (got {}D input)".format(x.dim())
 
         if self.log_sampling:
-            freq_bands = 2.**torch.linspace(0.,
-                                            self.max_freq, steps=self.N_freqs)
+            freq_bands = 2.0 ** torch.linspace(0.0, self.max_freq, steps=self.N_freqs)
         else:
-            freq_bands = torch.linspace(
-                2.**0., 2.**self.max_freq, steps=self.N_freqs)
+            freq_bands = torch.linspace(2.0**0.0, 2.0**self.max_freq, steps=self.N_freqs)
         output = []
         if self.include_input:
             output.append(x)
@@ -73,8 +69,7 @@ class DenseLayer(nn.Linear):
         super().__init__(in_dim, out_dim, *args, **kwargs)
 
     def reset_parameters(self) -> None:
-        torch.nn.init.xavier_uniform_(
-            self.weight, gain=torch.nn.init.calculate_gain(self.activation))
+        torch.nn.init.xavier_uniform_(self.weight, gain=torch.nn.init.calculate_gain(self.activation))
         if self.bias is not None:
             torch.nn.init.zeros_(self.bias)
 
@@ -107,9 +102,21 @@ class MLP(nn.Module):
         concat_feature (bool): whether to get feature from middle level and concat to the current feature.
     """
 
-    def __init__(self, name='', dim=3, c_dim=128,
-                 hidden_size=256, n_blocks=5, leaky=False, sample_mode='bilinear',
-                 color=False, skips=[2], grid_len=0.16, pos_embedding_method='fourier', concat_feature=False):
+    def __init__(
+        self,
+        name="",
+        dim=3,
+        c_dim=128,
+        hidden_size=256,
+        n_blocks=5,
+        leaky=False,
+        sample_mode="bilinear",
+        color=False,
+        skips=[2],
+        grid_len=0.16,
+        pos_embedding_method="fourier",
+        concat_feature=False,
+    ):
         super().__init__()
         self.name = name
         self.color = color
@@ -121,42 +128,40 @@ class MLP(nn.Module):
         self.skips = skips
 
         if c_dim != 0:
-            self.fc_c = nn.ModuleList([
-                nn.Linear(c_dim, hidden_size) for i in range(n_blocks)
-            ])
+            self.fc_c = nn.ModuleList([nn.Linear(c_dim, hidden_size) for i in range(n_blocks)])
 
-        if pos_embedding_method == 'fourier':
+        if pos_embedding_method == "fourier":
             embedding_size = 93
-            self.embedder = GaussianFourierFeatureTransform(
-                dim, mapping_size=embedding_size, scale=25)
-        elif pos_embedding_method == 'same':
+            self.embedder = GaussianFourierFeatureTransform(dim, mapping_size=embedding_size, scale=25)
+        elif pos_embedding_method == "same":
             embedding_size = 3
             self.embedder = Same()
-        elif pos_embedding_method == 'nerf':
-            if 'color' in name:
+        elif pos_embedding_method == "nerf":
+            if "color" in name:
                 multires = 10
-                self.embedder = Nerf_positional_embedding(
-                    multires, log_sampling=True)
+                self.embedder = Nerf_positional_embedding(multires, log_sampling=True)
             else:
                 multires = 5
-                self.embedder = Nerf_positional_embedding(
-                    multires, log_sampling=False)
-            embedding_size = multires*6+3
-        elif pos_embedding_method == 'fc_relu':
+                self.embedder = Nerf_positional_embedding(multires, log_sampling=False)
+            embedding_size = multires * 6 + 3
+        elif pos_embedding_method == "fc_relu":
             embedding_size = 93
-            self.embedder = DenseLayer(dim, embedding_size, activation='relu')
+            self.embedder = DenseLayer(dim, embedding_size, activation="relu")
 
         self.pts_linears = nn.ModuleList(
-            [DenseLayer(embedding_size, hidden_size, activation="relu")] +
-            [DenseLayer(hidden_size, hidden_size, activation="relu") if i not in self.skips
-             else DenseLayer(hidden_size + embedding_size, hidden_size, activation="relu") for i in range(n_blocks-1)])
+            [DenseLayer(embedding_size, hidden_size, activation="relu")]
+            + [
+                DenseLayer(hidden_size, hidden_size, activation="relu")
+                if i not in self.skips
+                else DenseLayer(hidden_size + embedding_size, hidden_size, activation="relu")
+                for i in range(n_blocks - 1)
+            ]
+        )
 
         if self.color:
-            self.output_linear = DenseLayer(
-                hidden_size, 4, activation="linear")
+            self.output_linear = DenseLayer(hidden_size, 4, activation="linear")
         else:
-            self.output_linear = DenseLayer(
-                hidden_size, 1, activation="linear")
+            self.output_linear = DenseLayer(hidden_size, 1, activation="linear")
 
         if not leaky:
             self.actvn = F.relu
@@ -165,25 +170,35 @@ class MLP(nn.Module):
 
         self.sample_mode = sample_mode
 
-    def sample_grid_feature(self, p, c):
-        p_nor = normalize_3d_coordinate(p.clone(), self.bound)
-        p_nor = p_nor.unsqueeze(0)
-        vgrid = p_nor[:, :, None, None].float()
-        # acutally trilinear interpolation if mode = 'bilinear'
-        c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True,
-                          mode=self.sample_mode).squeeze(-1).squeeze(-1)
-        return c
+    # def sample_grid_feature(self, p, c):
+    #     p_nor = normalize_3d_coordinate(p.clone(), self.bound)
+    #     p_nor = p_nor.unsqueeze(0)
+    #     vgrid = p_nor[:, :, None, None].float()
+    #     print("sample grid feature ")
+    #     # print("p_nor ", p_nor, p_nor.shape)
+    #     # print("vgrid ", vgrid, vgrid.shape)
+    #     # print("c ", c)
+    #     # acutally trilinear interpolation if mode = 'bilinear'
+    #     c = (
+    #         F.grid_sample(c, vgrid, padding_mode="border", align_corners=True, mode=self.sample_mode)
+    #         .squeeze(-1)
+    #         .squeeze(-1)
+    #     )
+    #     return c
 
     def forward(self, p, c_grid=None):
+        # print("forward MLP", self.name, c_grid.keys())
+        # print("sample mode ", self.sample_mode)
         if self.c_dim != 0:
-            c = self.sample_grid_feature(
-                p, c_grid['grid_' + self.name]).transpose(1, 2).squeeze(0)
+            # c = self.sample_grid_feature(p, c_grid["grid_" + self.name]).transpose(1, 2).squeeze(0)
+            c = c_grid["grid_" + self.name].sample(p, self.bound).transpose(1, 2).squeeze(0)
+            # print("sampled c", c.shape)
 
             if self.concat_feature:
                 # only happen to fine decoder, get feature from middle level and concat to the current feature
                 with torch.no_grad():
-                    c_middle = self.sample_grid_feature(
-                        p, c_grid['grid_middle']).transpose(1, 2).squeeze(0)
+                    # c_middle = self.sample_grid_feature(p, c_grid["grid_middle"]).transpose(1, 2).squeeze(0)
+                    c_middle = c_grid["grid_middle"].sample(p, self.bound).transpose(1, 2).squeeze(0)
                 c = torch.cat([c, c_middle], dim=1)
 
         p = p.float()
@@ -220,9 +235,19 @@ class MLP_no_xyz(nn.Module):
         grid_len (float): voxel length of its corresponding feature grid.
     """
 
-    def __init__(self, name='', dim=3, c_dim=128,
-                 hidden_size=256, n_blocks=5, leaky=False,
-                 sample_mode='bilinear', color=False, skips=[2], grid_len=0.16):
+    def __init__(
+        self,
+        name="",
+        dim=3,
+        c_dim=128,
+        hidden_size=256,
+        n_blocks=5,
+        leaky=False,
+        sample_mode="bilinear",
+        color=False,
+        skips=[2],
+        grid_len=0.16,
+    ):
         super().__init__()
         self.name = name
         self.no_grad_feature = False
@@ -233,16 +258,19 @@ class MLP_no_xyz(nn.Module):
         self.skips = skips
 
         self.pts_linears = nn.ModuleList(
-            [DenseLayer(hidden_size, hidden_size, activation="relu")] +
-            [DenseLayer(hidden_size, hidden_size, activation="relu") if i not in self.skips
-             else DenseLayer(hidden_size + c_dim, hidden_size, activation="relu") for i in range(n_blocks-1)])
+            [DenseLayer(hidden_size, hidden_size, activation="relu")]
+            + [
+                DenseLayer(hidden_size, hidden_size, activation="relu")
+                if i not in self.skips
+                else DenseLayer(hidden_size + c_dim, hidden_size, activation="relu")
+                for i in range(n_blocks - 1)
+            ]
+        )
 
         if self.color:
-            self.output_linear = DenseLayer(
-                hidden_size, 4, activation="linear")
+            self.output_linear = DenseLayer(hidden_size, 4, activation="linear")
         else:
-            self.output_linear = DenseLayer(
-                hidden_size, 1, activation="linear")
+            self.output_linear = DenseLayer(hidden_size, 1, activation="linear")
 
         if not leaky:
             self.actvn = F.relu
@@ -251,17 +279,20 @@ class MLP_no_xyz(nn.Module):
 
         self.sample_mode = sample_mode
 
-    def sample_grid_feature(self, p, grid_feature):
-        p_nor = normalize_3d_coordinate(p.clone(), self.bound)
-        p_nor = p_nor.unsqueeze(0)
-        vgrid = p_nor[:, :, None, None].float()
-        c = F.grid_sample(grid_feature, vgrid, padding_mode='border',
-                          align_corners=True, mode=self.sample_mode).squeeze(-1).squeeze(-1)
-        return c
+    # def sample_grid_feature(self, p, grid_feature):
+    #     p_nor = normalize_3d_coordinate(p.clone(), self.bound)
+    #     p_nor = p_nor.unsqueeze(0)
+    #     vgrid = p_nor[:, :, None, None].float()
+    #     c = (
+    #         F.grid_sample(grid_feature, vgrid, padding_mode="border", align_corners=True, mode=self.sample_mode)
+    #         .squeeze(-1)
+    #         .squeeze(-1)
+    #     )
+    #     return c
 
     def forward(self, p, c_grid, **kwargs):
-        c = self.sample_grid_feature(
-            p, c_grid['grid_' + self.name]).transpose(1, 2).squeeze(0)
+        # c = self.sample_grid_feature(p, c_grid["grid_" + self.name]).transpose(1, 2).squeeze(0)
+        c = c_grid["grid_" + self.name].sample(p, self.bound).transpose(1, 2).squeeze(0)
         h = c
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
@@ -275,7 +306,7 @@ class MLP_no_xyz(nn.Module):
 
 
 class NICE(nn.Module):
-    """    
+    """
     Neural Implicit Scalable Encoding.
 
     Args:
@@ -290,53 +321,88 @@ class NICE(nn.Module):
         pos_embedding_method (str): positional embedding method.
     """
 
-    def __init__(self, dim=3, c_dim=32,
-                 coarse_grid_len=2.0,  middle_grid_len=0.16, fine_grid_len=0.16,
-                 color_grid_len=0.16, hidden_size=32, coarse=False, pos_embedding_method='fourier'):
+    def __init__(
+        self,
+        dim=3,
+        c_dim=32,
+        coarse_grid_len=2.0,
+        middle_grid_len=0.16,
+        fine_grid_len=0.16,
+        color_grid_len=0.16,
+        hidden_size=32,
+        coarse=False,
+        pos_embedding_method="fourier",
+    ):
         super().__init__()
 
         if coarse:
             self.coarse_decoder = MLP_no_xyz(
-                name='coarse', dim=dim, c_dim=c_dim, color=False, hidden_size=hidden_size, grid_len=coarse_grid_len)
+                name="coarse", dim=dim, c_dim=c_dim, color=False, hidden_size=hidden_size, grid_len=coarse_grid_len
+            )
 
-        self.middle_decoder = MLP(name='middle', dim=dim, c_dim=c_dim, color=False,
-                                  skips=[2], n_blocks=5, hidden_size=hidden_size,
-                                  grid_len=middle_grid_len, pos_embedding_method=pos_embedding_method)
-        self.fine_decoder = MLP(name='fine', dim=dim, c_dim=c_dim*2, color=False,
-                                skips=[2], n_blocks=5, hidden_size=hidden_size,
-                                grid_len=fine_grid_len, concat_feature=True, pos_embedding_method=pos_embedding_method)
-        self.color_decoder = MLP(name='color', dim=dim, c_dim=c_dim, color=True,
-                                 skips=[2], n_blocks=5, hidden_size=hidden_size,
-                                 grid_len=color_grid_len, pos_embedding_method=pos_embedding_method)
+        self.middle_decoder = MLP(
+            name="middle",
+            dim=dim,
+            c_dim=c_dim,
+            color=False,
+            skips=[2],
+            n_blocks=5,
+            hidden_size=hidden_size,
+            grid_len=middle_grid_len,
+            pos_embedding_method=pos_embedding_method,
+        )
+        self.fine_decoder = MLP(
+            name="fine",
+            dim=dim,
+            c_dim=c_dim * 2,
+            color=False,
+            skips=[2],
+            n_blocks=5,
+            hidden_size=hidden_size,
+            grid_len=fine_grid_len,
+            concat_feature=True,
+            pos_embedding_method=pos_embedding_method,
+        )
+        self.color_decoder = MLP(
+            name="color",
+            dim=dim,
+            c_dim=c_dim,
+            color=True,
+            skips=[2],
+            n_blocks=5,
+            hidden_size=hidden_size,
+            grid_len=color_grid_len,
+            pos_embedding_method=pos_embedding_method,
+        )
 
-    def forward(self, p, c_grid, stage='middle', **kwargs):
+    def forward(self, p, c_grid, stage="middle", **kwargs):
         """
-            Output occupancy/color in different stage.
+        Output occupancy/color in different stage.
         """
-        device = f'cuda:{p.get_device()}'
-        if stage == 'coarse':
+        device = f"cuda:{p.get_device()}"
+        if stage == "coarse":
             occ = self.coarse_decoder(p, c_grid)
             occ = occ.squeeze(0)
             raw = torch.zeros(occ.shape[0], 4).to(device).float()
             raw[..., -1] = occ
             return raw
-        elif stage == 'middle':
+        elif stage == "middle":
             middle_occ = self.middle_decoder(p, c_grid)
             middle_occ = middle_occ.squeeze(0)
             raw = torch.zeros(middle_occ.shape[0], 4).to(device).float()
             raw[..., -1] = middle_occ
             return raw
-        elif stage == 'fine':
+        elif stage == "fine":
             fine_occ = self.fine_decoder(p, c_grid)
             raw = torch.zeros(fine_occ.shape[0], 4).to(device).float()
             middle_occ = self.middle_decoder(p, c_grid)
             middle_occ = middle_occ.squeeze(0)
-            raw[..., -1] = fine_occ+middle_occ
+            raw[..., -1] = fine_occ + middle_occ
             return raw
-        elif stage == 'color':
+        elif stage == "color":
             fine_occ = self.fine_decoder(p, c_grid)
             raw = self.color_decoder(p, c_grid)
             middle_occ = self.middle_decoder(p, c_grid)
             middle_occ = middle_occ.squeeze(0)
-            raw[..., -1] = fine_occ+middle_occ
+            raw[..., -1] = fine_occ + middle_occ
             return raw
