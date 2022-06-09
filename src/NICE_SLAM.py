@@ -221,7 +221,8 @@ class NICE_SLAM:
             coarse_val_shape[0], coarse_val_shape[2] = coarse_val_shape[2], coarse_val_shape[0]
             self.coarse_val_shape = coarse_val_shape
             val_shape = [1, c_dim, *coarse_val_shape]
-            c[coarse_key] = VoxelHash(val_shape, mean=0.0, std=0.01)
+            self.shared_decoders.bound = self.bound
+            c[coarse_key] = VoxelHash(val_shape, self.shared_decoders.bound, mean=0.0, std=0.01)
             # coarse_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
             # c[coarse_key] = coarse_val
 
@@ -230,7 +231,7 @@ class NICE_SLAM:
         middle_val_shape[0], middle_val_shape[2] = middle_val_shape[2], middle_val_shape[0]
         self.middle_val_shape = middle_val_shape
         val_shape = [1, c_dim, *middle_val_shape]
-        c[middle_key] = VoxelHash(val_shape, mean=0.0, std=0.01)
+        c[middle_key] = VoxelHash(val_shape, self.shared_decoders.middle_decoder.bound, mean=0.0, std=0.01)
         # middle_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
         # c[middle_key] = middle_val
 
@@ -239,7 +240,7 @@ class NICE_SLAM:
         fine_val_shape[0], fine_val_shape[2] = fine_val_shape[2], fine_val_shape[0]
         self.fine_val_shape = fine_val_shape
         val_shape = [1, c_dim, *fine_val_shape]
-        c[fine_key] = VoxelHash(val_shape, mean=0.0, std=0.0001)
+        c[fine_key] = VoxelHash(val_shape, self.shared_decoders.fine_decoder.bound, mean=0.0, std=0.0001)
         # fine_val = torch.zeros(val_shape).normal_(mean=0, std=0.0001)
         # c[fine_key] = fine_val
 
@@ -248,7 +249,7 @@ class NICE_SLAM:
         color_val_shape[0], color_val_shape[2] = color_val_shape[2], color_val_shape[0]
         self.color_val_shape = color_val_shape
         val_shape = [1, c_dim, *color_val_shape]
-        c[color_key] = VoxelHash(val_shape, mean=0.0, std=0.01)
+        c[color_key] = VoxelHash(val_shape, self.shared_decoders.color_decoder.bound, mean=0.0, std=0.01)
         # color_val = torch.zeros(val_shape).normal_(mean=0, std=0.01)
         # c[color_key] = color_val
 

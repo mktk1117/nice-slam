@@ -173,7 +173,7 @@ class Mapper(object):
 
         points = points[mask]
         mask = mask.reshape(val_shape[2], val_shape[1], val_shape[0])
-        return torch.from_numpy(mask)
+        return mask
 
     def keyframe_selection_overlap(self, gt_color, gt_depth, c2w, keyframe_dict, k, N_samples=16, pixels=100):
         """
@@ -329,23 +329,24 @@ class Mapper(object):
 
                 else:
                     mask = self.get_mask_from_c2w(mask_c2w, key, val.shape[2:], gt_depth_np)
-                    print("mask ", mask.shape, type(mask))
-                    # mask = (
-                    #     torch.from_numpy(mask)
-                    #     .permute(2, 1, 0)
-                    #     .unsqueeze(0)
-                    #     .unsqueeze(0)
-                    #     .repeat(1, val.shape[1], 1, 1, 1)
-                    # )
+                    # print("mask ", mask.shape, type(mask))
+                    mask_tiled = (
+                        torch.from_numpy(mask)
+                        .permute(2, 1, 0)
+                        .unsqueeze(0)
+                        .unsqueeze(0)
+                        .repeat(1, val.shape[1], 1, 1, 1)
+                    )
                     val = val.to(device)
                     # val_grad is the optimizable part, other parameters will be fixed
                     # val_grad = val[mask].clone()
                     val.allocate_from_mask(mask)
-                    val_grad = val.apply_mask(mask)
+                    val_grad = val.apply_mask(mask_tiled)
                     # val_grad = val.allocate_from_mask(mask)
                     val_grad = Variable(val_grad.to(device), requires_grad=True)
                     masked_c_grad[key] = val_grad
                     masked_c_grad[key + "mask"] = mask
+                    masked_c_grad[key + "mask_tiled"] = mask_tiled
                     if key == "grid_coarse":
                         coarse_grid_para.append(val_grad)
                     elif key == "grid_middle":
@@ -425,9 +426,9 @@ class Mapper(object):
                             (not self.coarse_mapper) and ("coarse" not in key)
                         ):
                             val_grad = masked_c_grad[key]
-                            mask = masked_c_grad[key + "mask"]
+                            mask_tiled = masked_c_grad[key + "mask_tiled"]
                             val = val.to(device)
-                            val.set_mask_value(mask, val_grad)
+                            val.set_mask_value(mask_tiled, val_grad)
                             c[key] = val
 
                 if self.coarse_mapper:
@@ -508,7 +509,7 @@ class Mapper(object):
                 batch_rays_o = batch_rays_o[inside_mask]
                 batch_gt_depth = batch_gt_depth[inside_mask]
                 batch_gt_color = batch_gt_color[inside_mask]
-            print("c ", c)
+            # print("c ", c)
             ret = self.renderer.render_batch_ray(
                 c,
                 self.decoders,
@@ -548,9 +549,9 @@ class Mapper(object):
                 for key, val in c.items():
                     if (self.coarse_mapper and "coarse" in key) or ((not self.coarse_mapper) and ("coarse" not in key)):
                         val_grad = masked_c_grad[key]
-                        mask = masked_c_grad[key + "mask"]
+                        mask_tiled = masked_c_grad[key + "mask_tiled"]
                         val = val.detach()
-                        val.set_mask_value(mask, val_grad.clone().detach())
+                        val.set_mask_value(mask_tiled, val_grad.clone().detach())
                         c[key] = val
 
         if self.BA:
@@ -684,6 +685,7 @@ class Mapper(object):
                 self.mapping_idx[0] = idx
                 self.mapping_cnt[0] += 1
 
+                print("idx ", idx, "mesh freq ", self.mesh_freq)
                 if (idx % self.mesh_freq == 0) and (not (idx == 0 and self.no_mesh_on_first_frame)):
                     mesh_out_file = f"{self.output}/mesh/{idx:05d}_mesh.ply"
                     self.mesher.get_mesh(
@@ -698,6 +700,13 @@ class Mapper(object):
                         clean_mesh=self.clean_mesh,
                         get_mask_use_all_frames=False,
                     )
+
+                    voxel_out_file = f"{self.output}/voxel/{idx:05d}_voxel_hash.pt"
+                    # voxel_dim_out_file = f"{self.output}/voxel/{idx:05d}_voxel_dim.pt"
+                    # xyz = self.c._hash_pos
+                    torch.save(self.c, voxel_out_file)
+                    # torch.save(self.c.dim, voxel_dim_out_file)
+                    print("saved voxel hash", voxel_out_file)
 
                 if idx == self.n_img - 1:
                     mesh_out_file = f"{self.output}/mesh/final_mesh.ply"

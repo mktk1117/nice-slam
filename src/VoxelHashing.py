@@ -5,19 +5,29 @@ import torch.nn.functional as F
 
 
 class VoxelHash(object):
-    def __init__(self, shape, mean=0.0, std=0.01):
+    def __init__(self, shape, bound, mean=0.0, std=0.01):
         self.mean = mean
         self.std = std
         self._data = torch.zeros(shape).normal_(mean=mean, std=std)
         # self._allocated_idx = torch.tensor([0], dtype=torch.long)
         self._hash = {}
         self._hash_data = torch.zeros((shape[0], shape[1], 1)).normal_(mean=mean, std=std)
+        self._hash_pos = torch.zeros((3, 1)).normal_(mean=mean, std=std)
         self.shape = shape
+        self.bound = bound
+        lx = bound[0, 1] - bound[0, 0]
+        ly = bound[1, 1] - bound[1, 0]
+        lz = bound[2, 1] - bound[2, 0]
+        print("lx ", lx, "ly ", ly, "lz ", lz)
+        self.dim = torch.tensor([lz / shape[2], ly / shape[3], lx / shape[4]])
         self.device = "cpu"
+        print("shape ", self.shape)
+        print("bound ", self.bound)
+        print("dim ", self.dim)
 
     def get_data(self):
-        # return self._data
-        return self._hash_data
+        return self._data
+        # return self._hash_data
 
     @property
     def data(self):
@@ -32,21 +42,22 @@ class VoxelHash(object):
 
     def detach(self):
         # print("voxel hash detach")
-        # self._data = self._data.detach()
+        self._data = self._data.detach()
         self._hash_data = self._hash_data.detach()
         return self
 
     def share_memory_(self):
         # print("voxel hash share memory")
-        # self._data.share_memory_()
+        self._data.share_memory_()
         self._hash_data.share_memory_()
 
     def get_idx(self, mask):
         if isinstance(mask, np.ndarray):
             mask = torch.from_numpy(mask)
         idx = mask.nonzero()  # nonzero returns all indices with mask == true
+        coordinate = self.idx_to_coordinate(idx)
         linearized_idx = self._linearize_id(idx)
-        return linearized_idx
+        return linearized_idx, coordinate
 
     def get_data_from_idx(self, linearized_idx):
         data_idx = [self._hash[int(idx)] for idx in linearized_idx]
@@ -59,9 +70,11 @@ class VoxelHash(object):
 
     def allocate_from_mask(self, mask):
         """Assume mask dimension is the same as shape"""
-        linearized_idx = self.get_idx(mask)
-        for idx in linearized_idx:
-            if not idx in self._hash:
+        linearized_idx, coordinate = self.get_idx(mask)
+        for (idx, xyz) in zip(linearized_idx, coordinate):
+            # print("idx in hash ", idx, int(idx) in self._hash)
+            if not int(idx) in self._hash:
+                # print("idx not in hash", idx, xyz)
                 self._hash[int(idx)] = self._hash_data.shape[2]
                 self._hash_data = torch.cat(
                     [
@@ -72,8 +85,30 @@ class VoxelHash(object):
                     ],
                     dim=2,
                 )
+                self._hash_pos = torch.cat(
+                    [
+                        self._hash_pos,
+                        xyz.reshape(3, 1).to(self._hash_pos.device),
+                    ],
+                    dim=1,
+                )
+            # else:
+            #     print("idx in hash ", idx, self._hash)
+        # print("idx ", linearized_idx)
         # print("hash ", self._hash)
+        ####################test
+        # print("mask ", mask.shape)
+        if isinstance(mask, np.ndarray):
+            mask = torch.from_numpy(mask)
+        idx = mask.nonzero()  # nonzero returns all indices with mask == true
+        # print("idx mask ", idx.shape)
+        coordinate = self.idx_to_coordinate(idx)
+        # print("coordinate ", coordinate)
+        ####################test
         print("hash data", self._hash_data.shape)
+        print("hash pos", self._hash_pos.shape)
+        # print("data", self._data.shape)
+        # print("shape ", self.shape[0] * self.shape[1] * self.shape[2] * self.shape[3] * self.shape[4])
         # isin = torch.isin(linearized_idx, self._allocated_idx)
 
     def apply_mask(self, mask):
@@ -81,19 +116,19 @@ class VoxelHash(object):
         linearized_idx = self.get_idx(mask)
         # print("mask", mask)
         # print("before data ", self._data.shape)
-        # data = self._data[mask]
-        data = self.get_data_from_idx(linearized_idx)
+        data = self._data[mask]
+        # data = self.get_data_from_idx(linearized_idx)
         # print("after data ", data.shape)
         return data
 
     def set_mask_value(self, mask, value):
-        linearized_idx = self.get_idx(mask)
+        # linearized_idx = self.get_idx(mask)
         # print("value ", value.shape, value.device)
-        self.set_data_from_idx(linearized_idx, value)
+        # self.set_data_from_idx(linearized_idx, value)
         # print("data ", self._data.shape, self._data.device)
         # print("mask ", mask.shape)
         # print("value ", value.shape, value.device)
-        # self._data[mask] = value
+        self._data[mask] = value
 
     def coordinate_to_idx(self, p, bound):
         """
@@ -111,49 +146,58 @@ class VoxelHash(object):
         p[:, 1] = ((p[:, 1] - bound[1, 0]) / (bound[1, 1] - bound[1, 0])) * 2 - 1.0
         p[:, 2] = ((p[:, 2] - bound[2, 0]) / (bound[2, 1] - bound[2, 0])) * 2 - 1.0
         p = (p + 1) / 2
-        p[:, 0] *= self.shape[2]
+        p[:, 0] *= self.shape[4]
         p[:, 1] *= self.shape[3]
-        p[:, 2] *= self.shape[4]
+        p[:, 2] *= self.shape[2]
         return p.type(torch.long)
+
+    def idx_to_coordinate(self, idx):
+        z = idx[:, 0]
+        y = idx[:, 1]
+        x = idx[:, 2]
+        x = self.bound[0, 0] + x * self.dim[0]
+        y = self.bound[1, 0] + y * self.dim[1]
+        z = self.bound[2, 0] + z * self.dim[2]
+        return torch.vstack([x, y, z]).T
 
     def sample(self, p, bound):
         # print("P ", p)
         # print("bound ", bound)
-        idx = self.coordinate_to_idx(p, bound)
-        # print("idx ", idx)
-        linearized_idx = self._linearize_id(idx)
-        # print("linearized_idx ", linearized_idx)
-        c = []
-        for idx in linearized_idx:
-            # print("idx ", idx)
-            if idx in self._hash:
-                data = self._hash_data[:, :, self._hash[int(idx)]]
-                print("data ", data.shape)
-                c.append(data)
-            if not idx in self._hash:
-                c.append(torch.zeros((self.shape[0], self.shape[1])).to(self.device))
-        c = torch.cat(c, dim=0).T.unsqueeze(0)
-        print("c ", c.shape)
+        # idx = self.coordinate_to_idx(p, bound)
+        # # print("idx ", idx)
+        # linearized_idx = self._linearize_id(idx)
+        # # print("linearized_idx ", linearized_idx)
+        # c = []
+        # for idx in linearized_idx:
+        #     # print("idx ", idx)
+        #     if idx in self._hash:
+        #         data = self._hash_data[:, :, self._hash[int(idx)]]
+        #         print("data ", data.shape)
+        #         c.append(data)
+        #     if not idx in self._hash:
+        #         c.append(torch.zeros((self.shape[0], self.shape[1])).to(self.device))
+        # c = torch.cat(c, dim=0).T.unsqueeze(0)
+        # print("c ", c.shape)
         # print("xyz ", xyz)
         # mask_x = (xyz[:, 0] < bound[0][1]) & (xyz[:, 0] > bound[0][0])
         # mask_y = (xyz[:, 1] < bound[1][1]) & (xyz[:, 1] > bound[1][0])
         # mask_z = (xyz[:, 2] < bound[2][1]) & (xyz[:, 2] > bound[2][0])
         # mask = mask_x & mask_y & mask_z
         # print("mask ", mask)
-        # p_nor = normalize_3d_coordinate(p.clone(), bound)
-        # p_nor = p_nor.unsqueeze(0)
-        # vgrid = p_nor[:, :, None, None].float()
+        p_nor = normalize_3d_coordinate(p.clone(), bound)
+        p_nor = p_nor.unsqueeze(0)
+        vgrid = p_nor[:, :, None, None].float()
         # print("sample grid feature ")
         # print("p_nor ", p_nor, p_nor.shape)
         # print("vgrid ", vgrid, vgrid.shape)
-        # # print("c ", c)
-        # # acutally trilinear interpolation if mode = 'bilinear'
-        # sample_mode = "bilinear"
-        # c = (
-        #     F.grid_sample(self._data, vgrid, padding_mode="border", align_corners=True, mode=sample_mode)
-        #     .squeeze(-1)
-        #     .squeeze(-1)
-        # )
+        # print("c ", c)
+        # acutally trilinear interpolation if mode = 'bilinear'
+        sample_mode = "bilinear"
+        c = (
+            F.grid_sample(self._data, vgrid, padding_mode="border", align_corners=True, mode=sample_mode)
+            .squeeze(-1)
+            .squeeze(-1)
+        )
         # print("c ", c.shape)
         return c
 

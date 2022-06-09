@@ -1,6 +1,7 @@
 import os
 from multiprocessing import Process, Queue
 from queue import Empty
+from matplotlib.pyplot import draw
 
 import numpy as np
 import open3d as o3d
@@ -12,42 +13,95 @@ def normalize(x):
 
 
 def create_camera_actor(i, is_gt=False, scale=0.005):
-    cam_points = scale * np.array([
-        [0,   0,   0],
-        [-1,  -1, 1.5],
-        [1,  -1, 1.5],
-        [1,   1, 1.5],
-        [-1,   1, 1.5],
-        [-0.5, 1, 1.5],
-        [0.5, 1, 1.5],
-        [0, 1.2, 1.5]])
+    cam_points = scale * np.array(
+        [
+            [0, 0, 0],
+            [-1, -1, 1.5],
+            [1, -1, 1.5],
+            [1, 1, 1.5],
+            [-1, 1, 1.5],
+            [-0.5, 1, 1.5],
+            [0.5, 1, 1.5],
+            [0, 1.2, 1.5],
+        ]
+    )
 
-    cam_lines = np.array([[1, 2], [2, 3], [3, 4], [4, 1], [1, 3], [2, 4],
-                          [1, 0], [0, 2], [3, 0], [0, 4], [5, 7], [7, 6]])
+    cam_lines = np.array(
+        [[1, 2], [2, 3], [3, 4], [4, 1], [1, 3], [2, 4], [1, 0], [0, 2], [3, 0], [0, 4], [5, 7], [7, 6]]
+    )
     points = []
     for cam_line in cam_lines:
-        begin_points, end_points = cam_points[cam_line[0]
-                                              ], cam_points[cam_line[1]]
-        t_vals = np.linspace(0., 1., 100)
+        begin_points, end_points = cam_points[cam_line[0]], cam_points[cam_line[1]]
+        t_vals = np.linspace(0.0, 1.0, 100)
         begin_points, end_points
-        point = begin_points[None, :] * \
-            (1.-t_vals)[:, None] + end_points[None, :] * (t_vals)[:, None]
+        point = begin_points[None, :] * (1.0 - t_vals)[:, None] + end_points[None, :] * (t_vals)[:, None]
         points.append(point)
     points = np.concatenate(points)
-    color = (0.0, 0.0, 0.0) if is_gt else (1.0, .0, .0)
-    camera_actor = o3d.geometry.PointCloud(
-        points=o3d.utility.Vector3dVector(points))
+    color = (0.0, 0.0, 0.0) if is_gt else (1.0, 0.0, 0.0)
+    camera_actor = o3d.geometry.PointCloud(points=o3d.utility.Vector3dVector(points))
     camera_actor.paint_uniform_color(color)
 
     return camera_actor
 
 
-def draw_trajectory(queue, output, init_pose, cam_scale,
-                    save_rendering, near, estimate_c2w_list, gt_c2w_list):
+def box_center_to_corner(x, y, z, h, w, l):
+    # To return
+    corner_boxes = np.zeros((8, 3))
+
+    translation = np.array([x, y, z])
+
+    # Create a bounding box outline
+    bounding_box = np.array(
+        [
+            [-l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2],
+            [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2],
+            [-h / 2, -h / 2, -h / 2, -h / 2, h / 2, h / 2, h / 2, h / 2],
+        ]
+    )
+
+    # Standard 3x3 rotation matrix around the Z axis
+    # rotation_matrix = np.array(
+    #     [[np.cos(rotation), -np.sin(rotation), 0.0], [np.sin(rotation), np.cos(rotation), 0.0], [0.0, 0.0, 1.0]]
+    # )
+
+    # Repeat the [x, y, z] eight times
+    eight_points = np.tile(translation, (8, 1))
+
+    # Translate the rotated bounding box by the
+    # original center position to obtain the final box
+    corner_box = bounding_box + eight_points.transpose()
+
+    return corner_box.transpose()
+
+
+def get_corner_box(x, y, z, lx, ly, lz, color=[1, 0, 0]):
+    lines = [[0, 1], [1, 2], [2, 3], [0, 3], [4, 5], [5, 6], [6, 7], [4, 7], [0, 4], [1, 5], [2, 6], [3, 7]]
+
+    # Use the same color for all lines
+    colors = [color for _ in range(len(lines))]
+    corner_box = box_center_to_corner(x, y, z, lx, ly, lz)
+
+    line_set = o3d.geometry.LineSet()
+    line_set.points = o3d.utility.Vector3dVector(corner_box)
+    line_set.lines = o3d.utility.Vector2iVector(lines)
+    line_set.colors = o3d.utility.Vector3dVector(colors)
+    return line_set
+
+    # create a visualization object and window
+    # vis = o3d.visualization.visualizer()
+    # vis.create_window()
+    #
+    # # display the bounding boxes:
+    # vis.add_geometry(corner_box)
+
+
+def draw_trajectory(queue, output, init_pose, cam_scale, save_rendering, near, estimate_c2w_list, gt_c2w_list):
 
     draw_trajectory.queue = queue
     draw_trajectory.cameras = {}
     draw_trajectory.points = {}
+    draw_trajectory.voxel_geometries = []
+    draw_trajectory.voxel_cnt = 0
     draw_trajectory.ix = 0
     draw_trajectory.warmup = 0
     draw_trajectory.mesh = None
@@ -62,7 +116,7 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
         while True:
             try:
                 data = draw_trajectory.queue.get_nowait()
-                if data[0] == 'pose':
+                if data[0] == "pose":
                     i, pose, is_gt = data[1:]
                     if is_gt:
                         i += 100000
@@ -86,27 +140,29 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
 
                     draw_trajectory.cameras[i] = (cam_actor, pose)
 
-                elif data[0] == 'mesh':
+                elif data[0] == "mesh":
                     meshfile = data[1]
                     if draw_trajectory.mesh is not None:
                         vis.remove_geometry(draw_trajectory.mesh)
                     draw_trajectory.mesh = o3d.io.read_triangle_mesh(meshfile)
                     draw_trajectory.mesh.compute_vertex_normals()
                     # flip face orientation
-                    new_triangles = np.asarray(
-                        draw_trajectory.mesh.triangles)[:, ::-1]
-                    draw_trajectory.mesh.triangles = o3d.utility.Vector3iVector(
-                        new_triangles)
+                    new_triangles = np.asarray(draw_trajectory.mesh.triangles)[:, ::-1]
+                    draw_trajectory.mesh.triangles = o3d.utility.Vector3iVector(new_triangles)
                     draw_trajectory.mesh.triangle_normals = o3d.utility.Vector3dVector(
-                        -np.asarray(draw_trajectory.mesh.triangle_normals))
+                        -np.asarray(draw_trajectory.mesh.triangle_normals)
+                    )
                     vis.add_geometry(draw_trajectory.mesh)
 
-                elif data[0] == 'traj':
+                elif data[0] == "traj":
                     i, is_gt = data[1:]
 
-                    color = (0.0, 0.0, 0.0) if is_gt else (1.0, .0, .0)
+                    color = (0.0, 0.0, 0.0) if is_gt else (1.0, 0.0, 0.0)
                     traj_actor = o3d.geometry.PointCloud(
-                        points=o3d.utility.Vector3dVector(gt_c2w_list[1:i, :3, 3] if is_gt else estimate_c2w_list[1:i, :3, 3]))
+                        points=o3d.utility.Vector3dVector(
+                            gt_c2w_list[1:i, :3, 3] if is_gt else estimate_c2w_list[1:i, :3, 3]
+                        )
+                    )
                     traj_actor.paint_uniform_color(color)
 
                     if is_gt:
@@ -124,7 +180,45 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
                         draw_trajectory.traj_actor = traj_actor
                         vis.add_geometry(draw_trajectory.traj_actor)
 
-                elif data[0] == 'reset':
+                elif data[0] == "voxel":
+                    voxel = data[1]
+                    # print("voxel ", voxel)
+                    voxel_coarse = voxel["grid_coarse"]
+                    voxel_middle = voxel["grid_middle"]
+                    voxel_fine = voxel["grid_fine"]
+                    dim_coarse = voxel_coarse[1]
+                    dim_middle = voxel_middle[1]
+                    dim_fine = voxel_fine[1]
+                    # print("voxel coarse ", voxel_coarse)
+                    # draw_trajectory.voxel_cnt = 0
+                    # for geom in draw_trajectory.voxel_geometries:
+                    # vis.remove_geometry(geom)
+                    # draw_trajectory.voxel_geometries = []
+                    # for p in voxel_coarse._hash_pos:
+                    def add_voxel(p, dim, color):
+                        x = p[2]
+                        y = p[1]
+                        z = p[0]
+                        lx = dim[0]
+                        ly = dim[1]
+                        lz = dim[2]
+                        box_line = get_corner_box(x, y, z, lx, ly, lz, color)
+                        draw_trajectory.voxel_geometries.append(box_line)
+                        vis.add_geometry(box_line)
+
+                    # for p in voxel_coarse[0].T:
+                    #     add_voxel(p * scale, voxel_coarse[1][0] * scale, [1, 0, 0])
+                    for i, p in enumerate(voxel_coarse[0].T):
+                        if i > len(draw_trajectory.voxel_geometries):
+                            add_voxel(p, dim_coarse, [1, 0, 0])
+                    # for i, p in enumerate(voxel_middle[0].T):
+                    #     if i > len(draw_trajectory.voxel_geometries):
+                    #         add_voxel(p, dim_middle, [0, 1, 0])
+                    # for i, p in enumerate(voxel_fine[0].T):
+                    #     if i > len(draw_trajectory.voxel_geometries):
+                    #         add_voxel(p, dim_fine, [0, 0, 1])
+
+                elif data[0] == "reset":
                     draw_trajectory.warmup = -1
 
                     for i in draw_trajectory.points:
@@ -148,9 +242,8 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
         if save_rendering:
             # save the renderings, useful when making a video
             draw_trajectory.frame_idx += 1
-            os.makedirs(f'{output}/tmp_rendering', exist_ok=True)
-            vis.capture_screen_image(
-                f'{output}/tmp_rendering/{draw_trajectory.frame_idx:06d}.jpg')
+            os.makedirs(f"{output}/tmp_rendering", exist_ok=True)
+            vis.capture_screen_image(f"{output}/tmp_rendering/{draw_trajectory.frame_idx:06d}.jpg")
 
     vis = o3d.visualization.Visualizer()
 
@@ -165,7 +258,7 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
 
     # set the viewer's pose in the back of the first frame's pose
     param = ctr.convert_to_pinhole_camera_parameters()
-    init_pose[:3, 3] += 2*normalize(init_pose[:3, 2])
+    init_pose[:3, 3] += 2 * normalize(init_pose[:3, 2])
     init_pose[:3, 2] *= -1
     init_pose[:3, 1] *= -1
     init_pose = np.linalg.inv(init_pose)
@@ -178,28 +271,38 @@ def draw_trajectory(queue, output, init_pose, cam_scale,
 
 
 class SLAMFrontend:
-    def __init__(self, output, init_pose, cam_scale=1, save_rendering=False,
-                 near=0, estimate_c2w_list=None, gt_c2w_list=None):
+    def __init__(
+        self, output, init_pose, cam_scale=1, save_rendering=False, near=0, estimate_c2w_list=None, gt_c2w_list=None
+    ):
         self.queue = Queue()
-        self.p = Process(target=draw_trajectory, args=(
-            self.queue, output, init_pose, cam_scale, save_rendering,
-            near, estimate_c2w_list, gt_c2w_list))
+        self.p = Process(
+            target=draw_trajectory,
+            args=(self.queue, output, init_pose, cam_scale, save_rendering, near, estimate_c2w_list, gt_c2w_list),
+        )
 
     def update_pose(self, index, pose, gt=False):
         if isinstance(pose, torch.Tensor):
             pose = pose.cpu().numpy()
 
         pose[:3, 2] *= -1
-        self.queue.put_nowait(('pose', index, pose, gt))
-        
+        self.queue.put_nowait(("pose", index, pose, gt))
+
     def update_mesh(self, path):
-        self.queue.put_nowait(('mesh', path))
+        self.queue.put_nowait(("mesh", path))
 
     def update_cam_trajectory(self, c2w_list, gt):
-        self.queue.put_nowait(('traj', c2w_list, gt))
+        self.queue.put_nowait(("traj", c2w_list, gt))
+
+    def update_voxel(self, voxelfile):
+        voxel = torch.load(voxelfile)
+        data = {}
+        for k, v in voxel.items():
+            data[k] = [v._hash_pos.cpu(), v.dim.cpu()]
+
+        self.queue.put_nowait(("voxel", data))
 
     def reset(self):
-        self.queue.put_nowait(('reset', ))
+        self.queue.put_nowait(("reset",))
 
     def start(self):
         self.p.start()
